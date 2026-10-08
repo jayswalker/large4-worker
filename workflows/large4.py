@@ -1,10 +1,11 @@
-"""A passthrough chat workflow for Mistral Large 4 (Le Chonk)."""
+"""A passthrough chat workflow for Mistral Large 4 (Le Chonk), with diagnostics."""
+import traceback
+from datetime import timedelta
 from typing import Optional
 
 from pydantic import BaseModel, Field
 
 import mistralai.workflows as workflows
-from mistralai.workflows import Depends
 from mistralai.workflows.client import get_mistral_client
 
 MODEL = "mistral-large-4"
@@ -12,53 +13,58 @@ MODEL = "mistral-large-4"
 
 class Large4Input(BaseModel):
     prompt: str = Field(..., description="The prompt to send to Mistral Large 4.")
-    system_prompt: Optional[str] = Field(
-        default="", description="Optional system prompt to steer the model."
-    )
+    system_prompt: Optional[str] = Field(default="", description="Optional system prompt to steer the model.")
     temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(default=None, gt=0)
 
 
 class Large4Output(BaseModel):
-    reply: str
-    model: str
+    reply: str = ""
+    model: str = MODEL
     input_tokens: int = 0
     output_tokens: int = 0
+    error: Optional[str] = None
 
 
-@workflows.activity()
+@workflows.activity(start_to_close_timeout=timedelta(minutes=2))
 async def call_large4(
     prompt: str,
     system_prompt: Optional[str],
     temperature: float,
     max_tokens: Optional[int],
-    client=Depends(get_mistral_client),
 ) -> Large4Output:
-    """Send one prompt to Mistral Large 4 and return the reply."""
-    messages = []
-    if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": prompt})
+    """Send one prompt to Mistral Large 4; if it fails, return the real error text."""
+    try:
+        client = get_mistral_client()
 
-    kwargs = {}
-    if max_tokens:
-        kwargs["max_tokens"] = max_tokens
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
 
-    response = await client.chat.complete_async(
-        model=MODEL,
-        messages=messages,
-        temperature=temperature,
-        **kwargs,
-    )
+        kwargs = {}
+        if max_tokens:
+            kwargs["max_tokens"] = max_tokens
 
-    choice = response.choices[0]
-    usage = response.usage
-    return Large4Output(
-        reply=choice.message.content or "",
-        model=response.model or MODEL,
-        input_tokens=getattr(usage, "prompt_tokens", 0) or 0,
-        output_tokens=getattr(usage, "completion_tokens", 0) or 0,
-    )
+        response = await client.chat.complete_async(
+            model=MODEL,
+            messages=messages,
+            temperature=temperature,
+            **kwargs,
+        )
+
+        choice = response.choices[0]
+        usage = response.usage
+        return Large4Output(
+            reply=choice.message.content or "",
+            model=response.model or MODEL,
+            input_tokens=getattr(usage, "prompt_tokens", 0) or 0,
+            output_tokens=getattr(usage, "completion_tokens", 0) or 0,
+        )
+    except Exception:
+        trace = traceback.format_exc()
+        print("LARGE4 DEBUG — activity failed:\n" + trace)
+        return Large4Output(reply="", model=MODEL, error=trace[-2000:])
 
 
 @workflows.workflow.define(
