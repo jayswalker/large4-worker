@@ -1,0 +1,3 @@
+# mistralai-workflows >= 3.10 is required to read service-account tokens
+# in managed deployments. The [mistralai] extra provides get_mistral_client().
+mistralai-workflows[mistralai]>=3.10,<4
